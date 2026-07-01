@@ -176,7 +176,7 @@ sparse-overrides loop is working.
 `PUT /api/settings` is a loaded gun until auth exists — unauthenticated, anyone
 on the LAN can reconfigure alerting or disable detections. Land the endpoint now
 as **known-unprotected**, and make #2 the immediate next step: reverse-proxy
-forward-auth (operator already runs NPM) or a single app password with a signed
+forward-auth (if a reverse proxy is in use) or a single app password with a signed
 session cookie. **Not** a rolled-from-scratch user/session system.
 
 ## Review checklist (reject a proposal that does any of these)
