@@ -6,7 +6,7 @@ import os
 import re
 
 import asyncpg
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastembed import TextEmbedding
@@ -17,6 +17,47 @@ DATA_DIR = os.environ.get("DATA_DIR", "/data")
 SNAP_DIR = os.path.join(DATA_DIR, "snapshots")
 EMBED_MODEL = os.environ.get("EMBED_MODEL", "BAAI/bge-small-en-v1.5")
 ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+
+# Allow-list of DB-overridable operational settings, enforced here on write.
+# Keep in sync with bridge/gawkr/settings.py OPERATIONAL_KEYS -- this list must
+# never include a secret or infra endpoint (those stay env-only in bridge's Config).
+_LEVELS = ("none", "low", "medium", "high")
+
+
+def _v_bool(v):
+    if not isinstance(v, bool):
+        raise ValueError("expected bool")
+    return v
+
+
+def _v_str_list(v):
+    if not isinstance(v, list) or not all(isinstance(x, str) for x in v):
+        raise ValueError("expected list of strings")
+    return v
+
+
+def _v_float(v):
+    if not isinstance(v, (int, float)) or isinstance(v, bool):
+        raise ValueError("expected number")
+    return float(v)
+
+
+def _v_threat_level(v):
+    if v not in _LEVELS:
+        raise ValueError("invalid threat level")
+    return v
+
+
+OPERATIONAL_KEYS = {
+    "identify_vehicles": _v_bool,
+    "transcribe_cameras": _v_str_list,
+    "smart_types": _v_str_list,
+    "alert_on_weapon": _v_bool,
+    "alert_threat_level": _v_threat_level,
+    "alert_keywords": _v_str_list,
+    "alert_cameras": _v_str_list,
+    "alert_cooldown": _v_float,
+}
 
 app = FastAPI(title="gawkr")
 _pool: asyncpg.Pool | None = None
@@ -40,6 +81,17 @@ async def _startup() -> None:
             await asyncio.sleep(2)
     if _pool is None:
         raise RuntimeError("could not connect to database")
+    # Defensive: on a fresh deploy this service can start before bridge has
+    # run once and created the table itself.
+    await _pool.execute(
+        """
+        CREATE TABLE IF NOT EXISTS settings (
+          key        TEXT PRIMARY KEY,
+          value      JSONB NOT NULL,
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )
+        """
+    )
     _embed = TextEmbedding(model_name=EMBED_MODEL)
 
 
@@ -128,6 +180,39 @@ async def event(eid: str) -> dict:
     out = _row(r)
     out["record"] = r["record"]
     return out
+
+
+@app.get("/api/settings")
+async def get_settings() -> dict:
+    """Sparse DB overrides only -- keys not set here still fall back to the
+    bridge's env-configured default, which this service cannot see."""
+    rows = await _pool.fetch("SELECT key, value FROM settings")
+    return {r["key"]: r["value"] for r in rows if r["key"] in OPERATIONAL_KEYS}
+
+
+@app.put("/api/settings")
+async def put_settings(body: dict = Body(...)) -> dict:
+    unknown = [k for k in body if k not in OPERATIONAL_KEYS]
+    if unknown:
+        raise HTTPException(400, f"not overridable: {', '.join(unknown)}")
+
+    validated: dict = {}
+    for key, value in body.items():
+        try:
+            validated[key] = OPERATIONAL_KEYS[key](value)
+        except (ValueError, TypeError) as e:
+            raise HTTPException(400, f"{key}: {e}")
+
+    async with _pool.acquire() as conn:
+        async with conn.transaction():
+            for key, value in validated.items():
+                await conn.execute(
+                    """
+                    INSERT INTO settings (key, value, updated_at) VALUES ($1, $2, now())
+                    ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()
+                    """, key, value)
+            await conn.execute("NOTIFY gawkr_settings")
+    return validated
 
 
 @app.get("/api/snapshot/{eid}")

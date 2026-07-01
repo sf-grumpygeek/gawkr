@@ -31,6 +31,11 @@ CREATE INDEX IF NOT EXISTS idx_events_ts ON events (ts DESC);
 CREATE INDEX IF NOT EXISTS idx_events_camera ON events (camera);
 CREATE INDEX IF NOT EXISTS idx_events_embedding
   ON events USING hnsw (embedding vector_cosine_ops);
+CREATE TABLE IF NOT EXISTS settings (
+  key        TEXT PRIMARY KEY,
+  value      JSONB NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 """
 
 
@@ -47,6 +52,11 @@ class Store:
         self.media_dir = os.path.join(cfg.data_dir, "snapshots")
         os.makedirs(self.media_dir, exist_ok=True)
         self._pool: asyncpg.Pool | None = None
+
+    @property
+    def pool(self) -> asyncpg.Pool:
+        assert self._pool is not None
+        return self._pool
 
     async def open(self) -> None:
         last = None

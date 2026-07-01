@@ -8,6 +8,7 @@ from .config import Config
 from .embeddings import Embedder
 from .pipeline import (DescriptionProcessor, Pipeline, PlateProcessor,
                        TranscriptionProcessor, VehicleProcessor)
+from .settings import LiveSettings
 from .source import ProtectSource
 from .store import Store
 from .vision import VisionClient
@@ -25,37 +26,36 @@ async def main() -> None:
     store = Store(cfg, embedder)
     await store.open()
 
-    vision = VisionClient(cfg)
-    processors = [DescriptionProcessor(vision), PlateProcessor(vision)]
-    closers = [vision.close]
+    settings = LiveSettings(cfg, store.pool)
+    await settings.start()
 
-    if cfg.identify_vehicles:
-        processors.append(VehicleProcessor(vision))
+    vision = VisionClient(cfg)
+    processors = [DescriptionProcessor(vision), PlateProcessor(vision),
+                  VehicleProcessor(vision, settings)]
+    closers = [vision.close]
 
     whisper = None
     if cfg.whisper_url:
         from .whisper import WhisperClient
         whisper = WhisperClient(cfg)
-        processors.append(TranscriptionProcessor(whisper, cfg.transcribe_cameras))
+        processors.append(TranscriptionProcessor(whisper, settings))
         closers.append(whisper.close)
-        scope = ", ".join(cfg.transcribe_cameras) if cfg.transcribe_cameras else "all cameras"
-        log.info("transcription enabled via %s (%s)", cfg.whisper_url, scope)
+        log.info("transcription enabled via %s", cfg.whisper_url)
 
     alerter = notifier = None
     if cfg.gotify_url and cfg.gotify_token:
         from .alerts import AlertEngine
         from .gotify import GotifyNotifier
-        alerter = AlertEngine(cfg)
+        alerter = AlertEngine(settings)
         notifier = GotifyNotifier(cfg)
         closers.append(notifier.close)
-        log.info("gotify alerts enabled (weapon=%s, threat>=%s)",
-                 cfg.alert_on_weapon, cfg.alert_threat_level)
+        log.info("gotify alerts enabled")
 
     pipeline = Pipeline(processors, store, alerter, notifier)
-    source = ProtectSource(cfg, pipeline.run)
+    source = ProtectSource(settings, pipeline.run)
     await source.connect()
     source.start()
-    log.info("gawkr running; watching for %s", ", ".join(cfg.smart_types))
+    log.info("gawkr running; watching for %s", ", ".join(settings.smart_types))
 
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
@@ -67,6 +67,7 @@ async def main() -> None:
     await source.close()
     for close in closers:
         await close()
+    await settings.stop()
     await store.close()
 
 

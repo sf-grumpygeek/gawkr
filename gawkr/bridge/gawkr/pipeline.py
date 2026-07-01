@@ -55,11 +55,13 @@ class PlateProcessor:
 class VehicleProcessor:
     name = "vehicle"
 
-    def __init__(self, vision):
+    def __init__(self, vision, settings):
         self.vision = vision
+        self.settings = settings
 
     def handles(self, det: Detection) -> bool:
-        return det.snapshot is not None and "vehicle" in det.smart_types
+        return (det.snapshot is not None and "vehicle" in det.smart_types
+                and self.settings.identify_vehicles)
 
     async def process(self, det: Detection) -> dict:
         return await self.vision.read_vehicle(det.snapshot)
@@ -69,12 +71,12 @@ class TranscriptionProcessor:
     """Speech-to-text on the event clip's audio (event end)."""
     name = "transcription"
 
-    def __init__(self, whisper, cameras: list[str]):
+    def __init__(self, whisper, settings):
         self.whisper = whisper
-        self.cameras = cameras
+        self.settings = settings
 
     def handles(self, det: Detection) -> bool:
-        return det.clip is not None and _cam_ok(det, self.cameras)
+        return det.clip is not None and _cam_ok(det, self.settings.transcribe_cameras)
 
     async def process(self, det: Detection) -> dict:
         wav = await extract_wav(det.clip)
