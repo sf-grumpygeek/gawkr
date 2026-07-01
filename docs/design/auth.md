@@ -61,9 +61,7 @@ session cookie. Minimal and self-contained:
   **`hmac.compare_digest`** (constant-time — never `==`), then sets a signed,
   **HttpOnly**, **SameSite=Lax** cookie carrying an expiry. `Secure` when served
   over HTTPS.
-- A signing key, **`SESSION_SECRET`** (env). If unset, generate one and persist
-  it to the data dir; **never** ship a hardcoded default — a default signing key
-  makes every deployment's cookies forgeable.
+- A signing key, SESSION_SECRET (env, secret). Required when auth is enabled — if APP_PASSWORD is set but SESSION_SECRET is not, refuse to start with a clear error. Do not auto-generate-and-persist: the web container mounts /data read-only, and a persisted secret is one more file that can leak or get committed. Env-only, same as every other secret. Never ship a hardcoded default — a default signing key makes every deployment's cookies forgeable.
 - Middleware: unauthenticated requests → redirect to `/login` (HTML) or `401`
   (`/api`). `POST /logout` clears the cookie.
 - **Throttle failed logins** (a short delay, optional lockout) — a single shared
