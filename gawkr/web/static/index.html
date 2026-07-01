@@ -1,0 +1,323 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>gawkr — find anything</title>
+<style>
+  :root{
+    --bg:#0c1014; --surface:#141a21; --surface-2:#1b232c; --line:#283139;
+    --text:#d6dee6; --muted:#7f8b97; --accent:#2f81f7; --signal:#f5a623; --ok:#3fb950;
+    --mono:ui-monospace,"SF Mono","JetBrains Mono","Cascadia Code",Menlo,Consolas,monospace;
+    --ui:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --radius:10px;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{background:var(--bg);color:var(--text);font-family:var(--ui);
+    font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased}
+  ::selection{background:var(--accent);color:#fff}
+
+  header{position:sticky;top:0;z-index:20;display:flex;gap:16px;align-items:center;
+    padding:12px 20px;background:linear-gradient(180deg,#0e141aee,#0e141ac8);
+    backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+  .brand{display:flex;align-items:center;gap:9px;font-family:var(--mono);
+    font-weight:600;letter-spacing:1.5px;text-transform:uppercase;font-size:13px;white-space:nowrap}
+  .rec{width:9px;height:9px;border-radius:50%;background:#3a444e}
+  .rec.on{background:var(--signal);box-shadow:0 0 0 0 var(--signal);animation:pulse 2.4s infinite}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 #f5a62366}70%{box-shadow:0 0 0 7px #f5a62300}100%{box-shadow:0 0 0 0 #f5a62300}}
+  .brand small{color:var(--muted);font-size:10px;letter-spacing:2px}
+
+  .search{flex:1;position:relative;max-width:680px}
+  .search input{width:100%;padding:11px 14px 11px 40px;background:var(--surface);
+    border:1px solid var(--line);border-radius:var(--radius);color:var(--text);
+    font:inherit;font-size:15px;outline:none}
+  .search input:focus{border-color:var(--accent);box-shadow:0 0 0 3px #2f81f733}
+  .search input::placeholder{color:var(--muted)}
+  .search svg{position:absolute;left:13px;top:50%;transform:translateY(-50%);
+    width:16px;height:16px;stroke:var(--muted);fill:none;stroke-width:2}
+  .count{font-family:var(--mono);font-size:12px;color:var(--muted);white-space:nowrap}
+
+  .toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;
+    padding:12px 20px;border-bottom:1px solid var(--line)}
+  select{background:var(--surface);color:var(--text);border:1px solid var(--line);
+    border-radius:8px;padding:7px 10px;font:inherit;outline:none}
+  select:focus{border-color:var(--accent)}
+  .chips{display:flex;gap:6px;flex-wrap:wrap}
+  .chip{font-family:var(--mono);font-size:11px;letter-spacing:.4px;padding:5px 11px;
+    border-radius:999px;border:1px solid var(--line);background:transparent;color:var(--muted);
+    cursor:pointer;text-transform:lowercase;transition:.12s}
+  .chip:hover{color:var(--text);border-color:#39434d}
+  .chip.active{background:var(--accent);border-color:var(--accent);color:#fff}
+  .spacer{flex:1}
+  .ghost{background:none;border:none;color:var(--muted);cursor:pointer;font:inherit;
+    font-size:12px;text-decoration:underline;text-underline-offset:3px}
+  .ghost:hover{color:var(--text)}
+
+  main{padding:20px;max-width:1500px;margin:0 auto}
+  .grid{display:grid;gap:16px;grid-template-columns:repeat(auto-fill,minmax(260px,1fr))}
+
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);
+    overflow:hidden;cursor:pointer;transition:.14s;outline:none}
+  .card:hover,.card:focus-visible{border-color:#39454f;transform:translateY(-2px);
+    box-shadow:0 10px 26px -16px #000}
+  .card.notable{border-left:3px solid var(--signal)}
+  .frame{position:relative;aspect-ratio:16/10;background:#05080b;overflow:hidden}
+  .frame img{width:100%;height:100%;object-fit:cover;display:block}
+  .frame .noimg{position:absolute;inset:0;display:grid;place-items:center;
+    color:#39444e;font-family:var(--mono);font-size:11px;letter-spacing:1px}
+  .vf i{position:absolute;width:13px;height:13px;border:2px solid var(--signal);opacity:.65}
+  .vf .tl{top:8px;left:8px;border-right:0;border-bottom:0}
+  .vf .tr{top:8px;right:8px;border-left:0;border-bottom:0}
+  .vf .bl{bottom:8px;left:8px;border-right:0;border-top:0}
+  .vf .br{bottom:8px;right:8px;border-left:0;border-top:0}
+  .burn{position:absolute;bottom:7px;right:11px;font-family:var(--mono);font-size:11px;
+    color:var(--signal);letter-spacing:.5px;text-shadow:0 1px 3px #000}
+  .tag{position:absolute;top:8px;left:8px;font-family:var(--mono);font-size:10px;
+    letter-spacing:.5px;padding:3px 7px;border-radius:5px;background:#0a0e12cc;color:#cdd6df;
+    border:1px solid #ffffff14}
+  .tag.threat{background:#3a1d14cc;color:#ff8d5e;border-color:#ff8d5e55}
+  .pill.danger{background:#3a1d14;border-color:#ff8d5e;color:#ff8d5e}
+  .flag{position:absolute;top:8px;right:8px;width:8px;height:8px;border-radius:50%;
+    background:var(--signal);box-shadow:0 0 8px var(--signal)}
+  .body{padding:11px 13px}
+  .body p{margin:0 0 8px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;
+    overflow:hidden;min-height:2.7em}
+  .meta{display:flex;justify-content:space-between;gap:8px;font-family:var(--mono);
+    font-size:11px;color:var(--muted)}
+  .meta .cam{color:#9aa6b2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+  .empty,.loading{padding:80px 20px;text-align:center;color:var(--muted)}
+  .empty b{display:block;color:var(--text);font-size:16px;margin-bottom:6px;font-weight:600}
+
+  /* detail drawer */
+  .scrim{position:fixed;inset:0;background:#05080bbb;backdrop-filter:blur(2px);
+    opacity:0;pointer-events:none;transition:.18s;z-index:30}
+  .scrim.show{opacity:1;pointer-events:auto}
+  .drawer{position:fixed;top:0;right:0;height:100%;width:min(460px,92vw);z-index:40;
+    background:var(--surface);border-left:1px solid var(--line);transform:translateX(100%);
+    transition:transform .22s cubic-bezier(.4,0,.2,1);overflow-y:auto}
+  .drawer.show{transform:none}
+  .drawer .dframe{position:relative;aspect-ratio:16/10;background:#05080b}
+  .drawer .dframe img{width:100%;height:100%;object-fit:contain}
+  .dclose{position:absolute;top:10px;right:10px;width:30px;height:30px;border-radius:8px;
+    background:#0a0e12cc;border:1px solid #ffffff1c;color:#cdd6df;cursor:pointer;font-size:16px}
+  .dbody{padding:18px 20px 40px}
+  .dbody h2{margin:0 0 4px;font-size:17px}
+  .dts{font-family:var(--mono);font-size:12px;color:var(--muted);margin-bottom:14px}
+  .sec{margin-top:18px}
+  .sec h3{margin:0 0 8px;font-family:var(--mono);font-size:11px;letter-spacing:1.4px;
+    text-transform:uppercase;color:var(--muted);font-weight:600}
+  .pills{display:flex;flex-wrap:wrap;gap:6px}
+  .pill{font-size:12px;padding:4px 10px;border-radius:999px;background:var(--surface-2);
+    border:1px solid var(--line);color:#c4cdd6}
+  .kv{font-family:var(--mono);font-size:13px}
+  .plate{display:inline-block;font-family:var(--mono);font-weight:700;font-size:20px;
+    letter-spacing:3px;padding:8px 16px;border-radius:8px;background:#11161c;
+    border:1px solid var(--signal);color:var(--signal)}
+  .attr{padding:6px 0;border-bottom:1px solid var(--line);color:#c4cdd6}
+  details{margin-top:22px}
+  details summary{cursor:pointer;color:var(--muted);font-family:var(--mono);font-size:11px;
+    letter-spacing:1px;text-transform:uppercase}
+  pre{margin:10px 0 0;padding:12px;background:#0a0e12;border:1px solid var(--line);
+    border-radius:8px;overflow:auto;font-family:var(--mono);font-size:11.5px;color:#9fb0bf}
+
+  @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand"><span class="rec" id="rec"></span>gawkr<small id="livelbl">offline</small></div>
+  <div class="search">
+    <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+    <input id="q" placeholder="Find anything — “white truck at night”, “person at the back door”, a plate…" autocomplete="off" />
+  </div>
+  <div class="count" id="count"></div>
+</header>
+
+<div class="toolbar">
+  <select id="camera"><option value="">All cameras</option></select>
+  <div class="chips" id="types"></div>
+  <div class="spacer"></div>
+  <button class="ghost" id="clear">Clear</button>
+</div>
+
+<main>
+  <div id="view" class="grid"></div>
+  <div id="status" class="loading">Connecting…</div>
+</main>
+
+<div class="scrim" id="scrim"></div>
+<aside class="drawer" id="drawer" aria-hidden="true"></aside>
+
+<script>
+const TYPES = ["person","vehicle","animal","licensePlate","package","face"];
+const state = { mode:"feed", q:"", camera:"", type:"", poll:null };
+const $ = s => document.querySelector(s);
+const view = $("#view"), status = $("#status");
+
+function fmtTime(ts){ const d=new Date(ts*1000);
+  return d.toLocaleTimeString([], {hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false}); }
+function rel(ts){ const s=Math.floor(Date.now()/1000-ts);
+  if(s<60)return s+"s ago"; if(s<3600)return Math.floor(s/60)+"m ago";
+  if(s<86400)return Math.floor(s/3600)+"h ago"; return Math.floor(s/86400)+"d ago"; }
+function esc(t){ const d=document.createElement("div"); d.textContent=t??""; return d.innerHTML; }
+
+function card(e){
+  const img = e.has_snapshot
+    ? `<img loading="lazy" src="/api/snapshot/${e.event_id}" alt="">`
+    : `<div class="noimg">NO SIGNAL</div>`;
+  const type = e.smart_types[0] || "motion";
+  const danger = (e.weapon || e.threat_level==="high" || e.threat_level==="medium")
+    ? `<span class="tag threat">\u26a0 ${esc(e.weapon ? "weapon" : e.threat_level)}</span>` : "";
+  return `<article class="card ${e.notable?"notable":""}" tabindex="0" data-id="${e.event_id}">
+    <div class="frame">${img}
+      <div class="vf"><i class="tl"></i><i class="tr"></i><i class="bl"></i><i class="br"></i></div>
+      <span class="tag">${esc(type)}</span>${danger}${e.notable?'<span class="flag" title="notable"></span>':""}
+      <span class="burn">${fmtTime(e.ts)}</span>
+    </div>
+    <div class="body">
+      <p>${esc(e.summary) || "<span style='color:var(--muted)'>No description</span>"}</p>
+      <div class="meta"><span class="cam">${esc(e.camera)}</span><span>${rel(e.ts)}</span></div>
+    </div>
+  </article>`;
+}
+
+function render(list){
+  if(!list.length){
+    view.innerHTML=""; status.style.display="";
+    status.className="empty";
+    status.innerHTML = state.mode==="search"
+      ? `<b>Nothing matches “${esc(state.q)}”.</b>Try fewer words, or a color, vehicle, or action.`
+      : `<b>No events yet.</b>When a camera detects something, it shows up here.`;
+    return;
+  }
+  status.style.display="none";
+  view.innerHTML = list.map(card).join("");
+  $("#count").textContent = list.length + (state.mode==="search"?" matches":" events");
+}
+
+async function load(){
+  let url;
+  if(state.mode==="search"){ url = `/api/search?q=${encodeURIComponent(state.q)}`; }
+  else {
+    const p = new URLSearchParams();
+    if(state.camera) p.set("camera", state.camera);
+    if(state.type) p.set("type", state.type);
+    url = `/api/events?${p.toString()}`;
+  }
+  try{
+    const r = await fetch(url); if(!r.ok) throw new Error(r.status);
+    render(await r.json());
+    setLive(state.mode==="feed");
+  }catch(err){
+    status.style.display=""; status.className="empty";
+    status.innerHTML=`<b>Can’t reach the bridge.</b>Check that the stack is up: <code>docker compose ps</code>.`;
+    setLive(false);
+  }
+}
+
+function setLive(on){
+  $("#rec").classList.toggle("on", on);
+  $("#livelbl").textContent = on ? "live" : "paused";
+}
+
+function startPoll(){ stopPoll(); state.poll=setInterval(()=>{ refreshCameras(); if(state.mode==="feed") load(); }, 6000); }
+function stopPoll(){ if(state.poll) clearInterval(state.poll); }
+
+// search input (debounced)
+let t; $("#q").addEventListener("input", e=>{
+  clearTimeout(t); const v=e.target.value.trim();
+  t=setTimeout(()=>{ state.q=v; state.mode = v ? "search":"feed"; load(); }, 300);
+});
+$("#q").addEventListener("keydown", e=>{ if(e.key==="Enter"){ clearTimeout(t);
+  state.q=e.target.value.trim(); state.mode=state.q?"search":"feed"; load(); }});
+
+$("#camera").addEventListener("change", e=>{ state.camera=e.target.value; if(state.mode==="feed") load(); });
+$("#clear").addEventListener("click", ()=>{
+  state.q=""; state.camera=""; state.type=""; state.mode="feed";
+  $("#q").value=""; $("#camera").value="";
+  document.querySelectorAll(".chip").forEach(c=>c.classList.remove("active"));
+  load();
+});
+
+// type chips
+$("#types").innerHTML = TYPES.map(t=>`<button class="chip" data-t="${t}">${t}</button>`).join("");
+$("#types").addEventListener("click", e=>{
+  const b=e.target.closest(".chip"); if(!b) return;
+  const t=b.dataset.t; const active = state.type===t;
+  document.querySelectorAll(".chip").forEach(c=>c.classList.remove("active"));
+  state.type = active ? "" : t; if(!active) b.classList.add("active");
+  if(state.mode==="feed") load();
+});
+
+// detail drawer
+const drawer=$("#drawer"), scrim=$("#scrim");
+view.addEventListener("click", e=>{ const c=e.target.closest(".card"); if(c) openDetail(c.dataset.id); });
+view.addEventListener("keydown", e=>{ if(e.key==="Enter"){ const c=e.target.closest(".card"); if(c) openDetail(c.dataset.id);}});
+scrim.addEventListener("click", closeDetail);
+document.addEventListener("keydown", e=>{ if(e.key==="Escape") closeDetail(); });
+
+function section(title, inner){ return inner ? `<div class="sec"><h3>${title}</h3>${inner}</div>` : ""; }
+function pills(arr){ return arr&&arr.length ? `<div class="pills">${arr.map(x=>`<span class="pill">${esc(x)}</span>`).join("")}</div>`:""; }
+
+async function openDetail(id){
+  const r = await fetch(`/api/event/${id}`); if(!r.ok) return;
+  const e = await r.json();
+  const img = e.has_snapshot ? `<img src="/api/snapshot/${e.event_id}" alt="">` : `<div class="noimg" style="position:static;display:grid;place-items:center;height:100%">NO SIGNAL</div>`;
+  let plate="";
+  if(e.plate && e.plate.plate){ plate = section("License plate",
+    `<span class="plate">${esc(e.plate.plate)}</span>
+     <div class="kv" style="margin-top:8px;color:var(--muted)">${esc(e.plate.region||"")} · ${esc(e.plate.confidence||"")}</div>`); }
+  const weaponPill = e.weapon
+    ? `<span class="pill danger">\u26a0 weapon${e.weapon_detail?": "+esc(e.weapon_detail):""}</span>` : "";
+  const veh = e.vehicle;
+  let vehicle = "";
+  if(veh && (veh.make || veh.model || veh.color || veh.body_type)){
+    const line = [veh.color, veh.make, veh.model].filter(Boolean).join(" ");
+    vehicle = section("Vehicle",
+      `<div class="kv">${esc(line)}${veh.body_type?" \u00b7 "+esc(veh.body_type):""}`
+      + `${veh.confidence?` <span style="color:var(--muted)">(${esc(veh.confidence)})</span>`:""}</div>`
+      + (veh.details?`<div class="attr" style="margin-top:6px">${esc(veh.details)}</div>`:""));
+  }
+  const transcript = e.transcript && e.transcript.text ? section("Audio transcript", `<div class="attr">${esc(e.transcript.text)}</div>`) : "";
+  drawer.innerHTML = `
+    <div class="dframe">${img}<button class="dclose" aria-label="Close">✕</button></div>
+    <div class="dbody">
+      <h2>${esc(e.summary)||"Event"}</h2>
+      <div class="dts">${esc(e.camera)} · ${fmtTime(e.ts)} · ${rel(e.ts)}</div>
+      ${pills(e.smart_types)}
+      ${weaponPill?`<div class="pills" style="margin-top:8px">${weaponPill}</div>`:""}
+      ${plate}
+      ${vehicle}
+      ${section("Objects", pills(e.objects))}
+      ${e.attributes&&e.attributes.length ? section("Details", e.attributes.map(a=>`<div class="attr">${esc(a)}</div>`).join("")):""}
+      ${transcript}
+      <details><summary>Raw record</summary><pre>${esc(JSON.stringify(e.record,null,2))}</pre></details>
+    </div>`;
+  drawer.querySelector(".dclose").addEventListener("click", closeDetail);
+  drawer.classList.add("show"); scrim.classList.add("show"); drawer.setAttribute("aria-hidden","false");
+}
+function closeDetail(){ drawer.classList.remove("show"); scrim.classList.remove("show"); drawer.setAttribute("aria-hidden","true"); }
+
+let _camCache = "";
+async function refreshCameras(){
+  try{
+    const r = await fetch("/api/cameras");
+    if(!r.ok) return;
+    const cams = await r.json();
+    const key = cams.join("\u0001");
+    if(key === _camCache) return;                 // unchanged -> don't rebuild
+    _camCache = key;
+    const sel = $("#camera");
+    const current = sel.value;
+    sel.innerHTML = '<option value="">All cameras</option>' +
+      cams.map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join("");
+    if(cams.includes(current)) sel.value = current; // keep current selection
+  }catch{}
+}
+
+refreshCameras(); load(); startPoll();
+</script>
+</body>
+</html>

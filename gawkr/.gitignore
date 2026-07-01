@@ -1,0 +1,13 @@
+# secrets — never commit a real env file
+.env
+.env.*
+!.env.example
+
+# python
+__pycache__/
+*.pyc
+.venv/
+
+# local data (only relevant if you ever run outside docker)
+data/
+*.db

@@ -1,0 +1,86 @@
+name: gawkr
+
+# All config comes from environment variables (Portainer's env-vars box, or a local
+# .env for CLI). Nothing secret is committed. :- = default, :? = required.
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-gawkr}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-gawkr}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-gawkr} -d ${POSTGRES_DB:-gawkr}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  bridge:
+    build: ./bridge
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-gawkr}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-gawkr}
+      DATA_DIR: /data
+      # --- UniFi Protect (all four required) ---
+      UFP_ADDRESS: ${UFP_ADDRESS:?set UFP_ADDRESS}
+      UFP_PORT: ${UFP_PORT:-443}
+      UFP_USERNAME: ${UFP_USERNAME:?set UFP_USERNAME}
+      UFP_PASSWORD: ${UFP_PASSWORD:?set UFP_PASSWORD}
+      UFP_API_KEY: ${UFP_API_KEY:?set UFP_API_KEY}
+      UFP_SSL_VERIFY: ${UFP_SSL_VERIFY:-false}
+      # --- Vision model (your llama.cpp server) ---
+      VISION_URL: ${VISION_URL:?set VISION_URL}
+      VISION_MODEL: ${VISION_MODEL:-qwen2.5-vl}
+      VISION_API_KEY: ${VISION_API_KEY:-}
+      VISION_TIMEOUT: ${VISION_TIMEOUT:-60}
+      # --- Whisper transcription (optional; blank = off) ---
+      WHISPER_URL: ${WHISPER_URL:-}
+      WHISPER_TIMEOUT: ${WHISPER_TIMEOUT:-120}
+      TRANSCRIBE_CAMERAS: ${TRANSCRIBE_CAMERAS:-}
+      # --- Gotify alerts (blank URL/TOKEN = off) ---
+      GOTIFY_URL: ${GOTIFY_URL:-}
+      GOTIFY_TOKEN: ${GOTIFY_TOKEN:-}
+      GOTIFY_PRIORITY: ${GOTIFY_PRIORITY:-5}
+      WEB_BASE_URL: ${WEB_BASE_URL:-}
+      ALERT_ON_WEAPON: ${ALERT_ON_WEAPON:-true}
+      ALERT_THREAT_LEVEL: ${ALERT_THREAT_LEVEL:-medium}
+      ALERT_KEYWORDS: ${ALERT_KEYWORDS:-}
+      ALERT_CAMERAS: ${ALERT_CAMERAS:-}
+      ALERT_COOLDOWN: ${ALERT_COOLDOWN:-120}
+      # --- Behaviour ---
+      IDENTIFY_VEHICLES: ${IDENTIFY_VEHICLES:-true}
+      SMART_TYPES: ${SMART_TYPES:-person,vehicle,animal,licensePlate,package,face}
+    volumes:
+      - media:/data
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  web:
+    build: ./web
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-gawkr}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-gawkr}
+      DATA_DIR: /data
+      EMBED_MODEL: ${EMBED_MODEL:-BAAI/bge-small-en-v1.5}
+    volumes:
+      - media:/data:ro
+    ports:
+      - "${WEB_PORT:-8080}:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/api/cameras', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 90s
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  media:
