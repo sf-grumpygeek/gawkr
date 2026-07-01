@@ -104,6 +104,18 @@ async def _startup() -> None:
         )
         """
     )
+    # Defensive here too: the doctor page can be the first thing hit on a
+    # fresh deploy, before bridge has run once and created the table itself.
+    await _pool.execute(
+        """
+        CREATE TABLE IF NOT EXISTS doctor_status (
+          name       TEXT PRIMARY KEY,
+          ok         BOOLEAN NOT NULL,
+          detail     TEXT,
+          checked_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )
+        """
+    )
     _embed = TextEmbedding(model_name=EMBED_MODEL)
 
 
@@ -225,6 +237,21 @@ async def put_settings(body: dict = Body(...)) -> dict:
                     """, key, value)
             await conn.execute("NOTIFY gawkr_settings")
     return validated
+
+
+@app.get("/api/doctor")
+async def doctor_status() -> dict:
+    """Read-only diagnostic view: reachability/config status for Protect,
+    vision, and optional whisper/gotify, as last written by the bridge.
+    Never accepts input -- this is the doctor, not a setup wizard."""
+    try:
+        rows = await _pool.fetch("SELECT name, ok, detail, checked_at FROM doctor_status")
+    except Exception as e:
+        return {"database": {"ok": False, "detail": str(e)}}
+    out = {r["name"]: {"ok": r["ok"], "detail": r["detail"], "checked_at": r["checked_at"]}
+           for r in rows}
+    out["database"] = {"ok": True, "detail": None, "checked_at": None}
+    return out
 
 
 @app.get("/api/snapshot/{eid}")

@@ -36,6 +36,12 @@ CREATE TABLE IF NOT EXISTS settings (
   value      JSONB NOT NULL,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+CREATE TABLE IF NOT EXISTS doctor_status (
+  name       TEXT PRIMARY KEY,
+  ok         BOOLEAN NOT NULL,
+  detail     TEXT,
+  checked_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 """
 
 

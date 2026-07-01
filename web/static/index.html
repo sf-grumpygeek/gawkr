@@ -7,7 +7,7 @@
 <style>
   :root{
     --bg:#0c1014; --surface:#141a21; --surface-2:#1b232c; --line:#283139;
-    --text:#d6dee6; --muted:#7f8b97; --accent:#2f81f7; --signal:#f5a623; --ok:#3fb950;
+    --text:#d6dee6; --muted:#7f8b97; --accent:#2f81f7; --signal:#f5a623; --ok:#3fb950; --bad:#f85149;
     --mono:ui-monospace,"SF Mono","JetBrains Mono","Cascadia Code",Menlo,Consolas,monospace;
     --ui:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
     --radius:10px;
@@ -122,6 +122,24 @@
   pre{margin:10px 0 0;padding:12px;background:#0a0e12;border:1px solid var(--line);
     border-radius:8px;overflow:auto;font-family:var(--mono);font-size:11.5px;color:#9fb0bf}
 
+  /* doctor panel */
+  .doctor-panel{position:fixed;top:60px;right:20px;width:360px;max-height:70vh;overflow-y:auto;
+    background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);
+    box-shadow:0 20px 50px -20px #000;z-index:50;display:none}
+  .doctor-panel.show{display:block}
+  .dp-head{display:flex;justify-content:space-between;align-items:center;padding:12px 14px;
+    border-bottom:1px solid var(--line);font-weight:600}
+  .dp-head button{background:none;border:none;color:var(--muted);cursor:pointer;font-size:15px}
+  .dp-head button:hover{color:var(--text)}
+  .dp-body{padding:4px 14px 14px}
+  .check-row{display:flex;align-items:flex-start;gap:8px;padding:8px 0;border-bottom:1px solid var(--line)}
+  .check-row:last-child{border-bottom:none}
+  .check-dot{width:9px;height:9px;border-radius:50%;margin-top:5px;flex:none}
+  .check-dot.ok{background:var(--ok)}
+  .check-dot.bad{background:var(--bad)}
+  .check-name{font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted)}
+  .check-detail{font-size:13px;color:var(--text);margin-top:2px}
+
   @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style>
 </head>
@@ -133,6 +151,7 @@
     <input id="q" placeholder="Find anything — “white truck at night”, “person at the back door”, a plate…" autocomplete="off" />
   </div>
   <div class="count" id="count"></div>
+  <button class="ghost" id="doctorBtn">Setup</button>
 </header>
 
 <div class="toolbar">
@@ -149,6 +168,11 @@
 
 <div class="scrim" id="scrim"></div>
 <aside class="drawer" id="drawer" aria-hidden="true"></aside>
+
+<aside class="doctor-panel" id="doctorPanel" aria-hidden="true">
+  <div class="dp-head"><b>Setup check</b><button id="doctorClose" aria-label="Close">✕</button></div>
+  <div class="dp-body" id="doctorBody">Loading…</div>
+</aside>
 
 <script>
 const TYPES = ["person","vehicle","animal","licensePlate","package","face"];
@@ -316,6 +340,38 @@ async function refreshCameras(){
     if(cams.includes(current)) sel.value = current; // keep current selection
   }catch{}
 }
+
+// setup / doctor panel
+const DOCTOR_LABELS = {database:"Database", protect:"UniFi Protect", vision:"Vision model",
+  whisper:"Whisper", gotify:"Gotify"};
+const DOCTOR_ORDER = ["database","protect","vision","whisper","gotify"];
+async function loadDoctor(){
+  const body = $("#doctorBody");
+  body.textContent = "Checking…";
+  try{
+    const r = await fetch("/api/doctor"); if(!r.ok) throw new Error(r.status);
+    const data = await r.json();
+    const keys = DOCTOR_ORDER.filter(k=>k in data).concat(Object.keys(data).filter(k=>!DOCTOR_ORDER.includes(k)));
+    body.innerHTML = keys.map(k=>{
+      const c = data[k];
+      const label = DOCTOR_LABELS[k] || k;
+      const detail = c.detail || (c.ok ? "OK" : "failed");
+      return `<div class="check-row"><span class="check-dot ${c.ok?"ok":"bad"}"></span>
+        <div><div class="check-name">${esc(label)}</div><div class="check-detail">${esc(detail)}</div></div></div>`;
+    }).join("") || `<div class="check-detail">No checks reported yet.</div>`;
+  }catch(err){
+    body.innerHTML = `<div class="check-detail">Can’t reach the doctor endpoint.</div>`;
+  }
+}
+function toggleDoctor(show){
+  const p = $("#doctorPanel");
+  p.classList.toggle("show", show);
+  p.setAttribute("aria-hidden", show ? "false" : "true");
+  if(show) loadDoctor();
+}
+$("#doctorBtn").addEventListener("click", ()=> toggleDoctor(!$("#doctorPanel").classList.contains("show")));
+$("#doctorClose").addEventListener("click", ()=> toggleDoctor(false));
+document.addEventListener("keydown", e=>{ if(e.key==="Escape") toggleDoctor(false); });
 
 refreshCameras(); load(); startPoll();
 </script>

@@ -63,6 +63,42 @@ PLATE_USER = (
     'else null), "confidence" ("low" | "medium" | "high").'
 )
 
+# 64x64 solid-magenta JPEG (generated with Pillow) -- used only by self_test()
+# to probe whether the endpoint is reachable and actually image-capable. The
+# prompt below deliberately does NOT state the color: a text-only model that
+# never sees the image has no way to guess "magenta" specifically, whereas a
+# model that can see it reliably names it. Never stored/logged beyond the
+# pass/fail of that check.
+_TEST_JPEG = bytes.fromhex(
+    "ffd8ffe000104a46494600010100000100010000ffdb00430005030404040305"
+    "04040405050506070c08070707070f0b0b090c110f1212110f111113161c1713"
+    "141a1511111821181a1d1d1f1f1f13172224221e241c1e1f1effdb0043010505"
+    "050706070e08080e1e1411141e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e"
+    "1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1effc0"
+    "0011080040004003012200021101031101ffc4001f0000010501010101010100"
+    "000000000000000102030405060708090a0bffc400b510000201030302040305"
+    "0504040000017d01020300041105122131410613516107227114328191a10823"
+    "42b1c11552d1f02433627282090a161718191a25262728292a3435363738393a"
+    "434445464748494a535455565758595a636465666768696a737475767778797a"
+    "838485868788898a92939495969798999aa2a3a4a5a6a7a8a9aab2b3b4b5b6b7"
+    "b8b9bac2c3c4c5c6c7c8c9cad2d3d4d5d6d7d8d9dae1e2e3e4e5e6e7e8e9eaf1"
+    "f2f3f4f5f6f7f8f9faffc4001f01000301010101010101010100000000000001"
+    "02030405060708090a0bffc400b5110002010204040304070504040001027700"
+    "0102031104052131061241510761711322328108144291a1b1c109233352f015"
+    "6272d10a162434e125f11718191a262728292a35363738393a43444546474849"
+    "4a535455565758595a636465666768696a737475767778797a82838485868788"
+    "898a92939495969798999aa2a3a4a5a6a7a8a9aab2b3b4b5b6b7b8b9bac2c3c4"
+    "c5c6c7c8c9cad2d3d4d5d6d7d8d9dae2e3e4e5e6e7e8e9eaf2f3f4f5f6f7f8f9"
+    "faffda000c03010002110311003f00e6a8a28afe863faac28a28a0028a28a002"
+    "8a28a0028a28a0028a28a0028a28a0028a28a0028a28a0028a28a0028a28a002"
+    "8a28a0028a28a0028a28a0028a28a0028a28a00fffd9"
+)
+_TEST_PROMPT = (
+    "What is the single dominant color that fills this image? Reply with "
+    'ONLY this JSON object and nothing else: {"color": "<one word color name>"}'
+)
+_TEST_COLOR_WORDS = ("magenta", "pink", "fuchsia", "purple", "violet", "orchid", "plum", "lilac")
+
 
 class VisionClient:
     def __init__(self, cfg):
@@ -144,6 +180,17 @@ class VisionClient:
         data.setdefault("loitering", False)
         data.setdefault("threat_level", "none")
         return data
+
+    async def self_test(self) -> bool:
+        """Cheap reachability + image-capability probe for the doctor: send a
+        solid-color test image and require the reported color to match --
+        the prompt never states the color, so a text-only model with no
+        mmproj (which sees no image at all) has nothing to guess it from.
+        Raises on connection/HTTP failure; returns False (doesn't raise) when
+        reachable but the color doesn't match -- typically no mmproj."""
+        content = await self._chat(_TEST_JPEG, _TEST_PROMPT, 30)
+        color = str(_parse(content).get("color", "")).lower()
+        return any(word in color for word in _TEST_COLOR_WORDS)
 
     async def close(self) -> None:
         await self._client.aclose()
