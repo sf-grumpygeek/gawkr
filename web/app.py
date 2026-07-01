@@ -1,22 +1,67 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import json
+import logging
 import os
 import re
+import time
 
 import asyncpg
-from fastapi import Body, FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi import Body, FastAPI, HTTPException, Query, Request
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastembed import TextEmbedding
+from itsdangerous import URLSafeTimedSerializer
 from pgvector.asyncpg import register_vector
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+log = logging.getLogger("gawkr.web")
 
 DSN = os.environ["DATABASE_URL"]
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
 SNAP_DIR = os.path.join(DATA_DIR, "snapshots")
 EMBED_MODEL = os.environ.get("EMBED_MODEL", "BAAI/bge-small-en-v1.5")
 ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+
+# --- Auth: single app password (see docs/design/auth.md). Unset = disabled. ---
+# APP_PASSWORD and SESSION_SECRET are secrets -- env-only, like every other
+# secret in this project. Never stored in the settings table or surfaced in the UI.
+APP_PASSWORD = os.environ.get("APP_PASSWORD", "")
+SESSION_SECRET = os.environ.get("SESSION_SECRET", "")
+AUTH_ENABLED = bool(APP_PASSWORD)
+SESSION_COOKIE = "gawkr_session"
+SESSION_MAX_AGE = 7 * 24 * 3600  # 7 days
+
+if AUTH_ENABLED and not SESSION_SECRET:
+    raise SystemExit(
+        "APP_PASSWORD is set but SESSION_SECRET is not. Refusing to start: a "
+        "session-signing key is required to issue cookies, and gawkr will not "
+        "auto-generate or persist one (this container's /data mount is read-only). "
+        "Set SESSION_SECRET to a long random value, e.g. `openssl rand -hex 32`."
+    )
+
+if not AUTH_ENABLED:
+    log.warning(
+        "running without auth -- anyone who can reach this can view events and "
+        "change settings; set APP_PASSWORD or put gawkr behind an authenticating proxy."
+    )
+
+# Mixing the password into the signing key means rotating APP_PASSWORD (and
+# redeploying) changes the key, which invalidates every existing session --
+# password rotation is the whole "log everyone out" story, with no extra state.
+_serializer: URLSafeTimedSerializer | None = None
+if AUTH_ENABLED:
+    signing_key = SESSION_SECRET + hashlib.sha256(APP_PASSWORD.encode()).hexdigest()
+    _serializer = URLSafeTimedSerializer(signing_key, salt="gawkr-session")
+
+# Per-IP login throttle (in-memory; single-process container). Not persisted --
+# a restart resets it, which is fine, this only needs to slow down brute force.
+_login_state: dict[str, dict] = {}
+LOGIN_MAX_FAILURES = 10
+LOGIN_LOCKOUT_SECONDS = 300
 
 # Allow-list of DB-overridable operational settings, enforced here on write.
 # Keep in sync with bridge/gawkr/settings.py OPERATIONAL_KEYS -- this list must
@@ -88,6 +133,161 @@ OPERATIONAL_KEYS = {
 app = FastAPI(title="gawkr")
 _pool: asyncpg.Pool | None = None
 _embed: TextEmbedding | None = None
+
+# Paths reachable without a session. Everything else is gated when AUTH_ENABLED.
+_AUTH_EXEMPT = {"/login", "/logout", "/healthz"}
+
+
+def _is_authenticated(request: Request) -> bool:
+    if not AUTH_ENABLED:
+        return True
+    token = request.cookies.get(SESSION_COOKIE)
+    if not token:
+        return False
+    try:
+        _serializer.loads(token, max_age=SESSION_MAX_AGE)  # type: ignore[union-attr]
+        return True
+    except Exception:
+        # Fail closed: any malformed cookie or unexpected itsdangerous error
+        # (not just BadSignature/SignatureExpired) must never propagate out of
+        # the auth check and must never be treated as authenticated.
+        return False
+
+
+def _set_session_cookie(response, request: Request) -> None:
+    token = _serializer.dumps({"auth": True})  # type: ignore[union-attr]
+    response.set_cookie(
+        SESSION_COOKIE, token,
+        max_age=SESSION_MAX_AGE, httponly=True, samesite="lax",
+        secure=(request.url.scheme == "https"),
+    )
+
+
+def _client_key(request: Request) -> str:
+    return request.client.host if request.client else "unknown"
+
+
+def _throttle_check(key: str) -> float:
+    """Returns seconds to wait before processing this login attempt (0 if none)."""
+    st = _login_state.get(key)
+    if not st:
+        return 0.0
+    if st["failures"] >= LOGIN_MAX_FAILURES:
+        remaining = st["locked_until"] - time.monotonic()
+        if remaining > 0:
+            return remaining
+        _login_state.pop(key, None)
+    return 0.0
+
+
+def _throttle_fail(key: str) -> None:
+    st = _login_state.setdefault(key, {"failures": 0, "locked_until": 0.0})
+    st["failures"] += 1
+    if st["failures"] >= LOGIN_MAX_FAILURES:
+        st["locked_until"] = time.monotonic() + LOGIN_LOCKOUT_SECONDS
+
+
+def _throttle_reset(key: str) -> None:
+    _login_state.pop(key, None)
+
+
+_LOGIN_PAGE = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>gawkr — sign in</title>
+<style>
+  :root{{--bg:#0c1014;--surface:#141a21;--line:#283139;--text:#d6dee6;
+    --muted:#7f8b97;--accent:#2f81f7;--bad:#f85149;--radius:10px;
+    --ui:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --mono:ui-monospace,"SF Mono","JetBrains Mono","Cascadia Code",Menlo,Consolas,monospace}}
+  *{{box-sizing:border-box}}
+  html,body{{margin:0;height:100%}}
+  body{{background:var(--bg);color:var(--text);font-family:var(--ui);
+    display:flex;align-items:center;justify-content:center}}
+  form{{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);
+    padding:28px;width:280px;display:flex;flex-direction:column;gap:14px}}
+  h1{{font-family:var(--mono);font-size:14px;letter-spacing:1.5px;text-transform:uppercase;
+    margin:0 0 4px}}
+  input{{background:#0c1014;border:1px solid var(--line);border-radius:8px;
+    color:var(--text);padding:10px 12px;font:inherit;outline:none}}
+  input:focus{{border-color:var(--accent)}}
+  button{{background:var(--accent);border:none;border-radius:8px;color:#fff;
+    padding:10px 12px;font:inherit;font-weight:600;cursor:pointer}}
+  .err{{color:var(--bad);font-size:13px;margin:0}}
+</style>
+</head>
+<body>
+<form method="post" action="/login">
+  <h1>gawkr</h1>
+  {error}
+  <input type="password" name="password" placeholder="password" autofocus required />
+  <button type="submit">sign in</button>
+</form>
+</body>
+</html>"""
+
+
+@app.get("/login", include_in_schema=False, response_model=None)
+async def login_page(request: Request) -> HTMLResponse:
+    if _is_authenticated(request):
+        return RedirectResponse("/", status_code=303)
+    return HTMLResponse(_LOGIN_PAGE.format(error=""))
+
+
+@app.post("/login", include_in_schema=False, response_model=None)
+async def login_submit(request: Request) -> HTMLResponse | RedirectResponse:
+    if not AUTH_ENABLED:
+        return RedirectResponse("/", status_code=303)
+    key = _client_key(request)
+    if _throttle_check(key) > 0:
+        # Locked out: reject outright, no sleep. The password is never checked
+        # here, so a delay buys no security -- it would only tie up a request
+        # slot for up to LOGIN_LOCKOUT_SECONDS for every locked-out retry.
+        return HTMLResponse(
+            _LOGIN_PAGE.format(error='<p class="err">too many attempts, try again later</p>'),
+            status_code=429)
+
+    form = await request.form()
+    password = form.get("password", "")
+    if not isinstance(password, str):
+        password = ""
+
+    if hmac.compare_digest(password.encode(), APP_PASSWORD.encode()):
+        _throttle_reset(key)
+        resp = RedirectResponse("/", status_code=303)
+        _set_session_cookie(resp, request)
+        return resp
+
+    st = _login_state.get(key, {"failures": 0})
+    await asyncio.sleep(min(2 ** st["failures"], 20))
+    _throttle_fail(key)
+    return HTMLResponse(
+        _LOGIN_PAGE.format(error='<p class="err">wrong password</p>'), status_code=401)
+
+
+@app.post("/logout", include_in_schema=False, response_model=None)
+async def logout() -> RedirectResponse:
+    resp = RedirectResponse("/login", status_code=303)
+    resp.delete_cookie(SESSION_COOKIE)
+    return resp
+
+
+@app.get("/healthz", include_in_schema=False)
+async def healthz() -> dict:
+    """Unauthenticated liveness probe for the container healthcheck -- no data,
+    no DB round-trip, so it can't be used to bypass the login gate for anything."""
+    return {"ok": True}
+
+
+@app.middleware("http")
+async def _auth_gate(request: Request, call_next):
+    if AUTH_ENABLED and request.url.path not in _AUTH_EXEMPT and not _is_authenticated(request):
+        if request.url.path.startswith("/api"):
+            return JSONResponse({"detail": "unauthorized"}, status_code=401)
+        return RedirectResponse("/login", status_code=303)
+    return await call_next(request)
 
 
 async def _init_conn(conn):

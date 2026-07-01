@@ -67,6 +67,9 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-gawkr}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-gawkr}
       DATA_DIR: /data
       EMBED_MODEL: ${EMBED_MODEL:-BAAI/bge-small-en-v1.5}
+      # --- Auth (built-in single app password; blank APP_PASSWORD = disabled) ---
+      APP_PASSWORD: ${APP_PASSWORD:-}
+      SESSION_SECRET: ${SESSION_SECRET:-}
     volumes:
       - media:/data:ro
     ports:
@@ -75,7 +78,7 @@ services:
       db:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/api/cameras', timeout=3)"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz', timeout=3)"]
       interval: 15s
       timeout: 5s
       retries: 5

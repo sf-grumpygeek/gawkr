@@ -53,6 +53,36 @@ description within a few seconds. Everything past descriptions/plates/vehicles i
 optional and off by default — set `WHISPER_URL` for transcription,
 `GOTIFY_URL`+`GOTIFY_TOKEN` for alerts.
 
+## Auth
+
+gawkr is single-tenant — one operator/household, no user accounts or roles.
+When enabled, auth protects the whole app (viewing events *and* changing
+settings), not select endpoints.
+
+**Recommended: authenticate at a reverse proxy you already run.** gawkr adds
+zero auth code for this path — put it behind Nginx Proxy Manager, Traefik,
+Caddy, HAProxy, or a forward-auth provider (Authelia, Authentik, tinyauth) and
+leave `APP_PASSWORD`/`SESSION_SECRET` unset. If you go this route:
+- **Don't publish the container port to the host** — expose gawkr only on the
+  proxy's internal network, so nobody on the LAN can bypass the proxy by
+  hitting the container directly.
+- If terminating TLS at the proxy, run uvicorn with `--proxy-headers` (and a
+  trusted `--forwarded-allow-ips`) so gawkr sees the real scheme.
+
+**Fallback: built-in single app password.** For operators without a reverse
+proxy. Set both in your env (never commit real values):
+- `APP_PASSWORD` — the login password. Unset = auth disabled, with a loud
+  startup warning in the `web` container logs.
+- `SESSION_SECRET` — signs session cookies. Required whenever `APP_PASSWORD`
+  is set; the app refuses to start without it (it will not auto-generate or
+  persist one). Generate with `openssl rand -hex 32`.
+
+There's no username, no reset-password flow, and no email — a single-password
+tool has nothing to reset *to*. If you forget the password or suspect it
+leaked, don't try to recover it: edit `APP_PASSWORD` in your env and redeploy.
+That also invalidates every existing session, which is exactly what a
+password rotation should do.
+
 ## Notes & honest limits
 
 - The `get_camera_snapshot` / `get_camera_video` calls in `bridge/gawkr/source.py`

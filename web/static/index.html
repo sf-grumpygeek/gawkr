@@ -187,6 +187,7 @@
   <div class="count" id="count"></div>
   <button class="ghost" id="settingsBtn">Settings</button>
   <button class="ghost" id="doctorBtn">Setup</button>
+  <button class="ghost" id="logoutBtn">Logout</button>
 </header>
 
 <div class="toolbar">
@@ -576,6 +577,10 @@ function toggleSettings(show){
   p.setAttribute("aria-hidden", show ? "false" : "true");
   if(show) loadSettings();
 }
+$("#logoutBtn").addEventListener("click", async ()=>{
+  await fetch("/logout", {method:"POST"});
+  location.href = "/login";
+});
 $("#settingsBtn").addEventListener("click", ()=> toggleSettings(!$("#settingsPanel").classList.contains("show")));
 $("#settingsClose").addEventListener("click", ()=> toggleSettings(false));
 $("#settingsSave").addEventListener("click", saveSettings);
