@@ -30,7 +30,7 @@ if [ "$rc" -eq 0 ]; then
   echo "All reachable — safe to deploy the stack."
 else
   echo "Something is unreachable. Fix routing/firewall before deploying."
-  echo "Protect on 192.168.250.x is the usual culprit: the Portainer host needs"
+  echo "Protect on your Protect VLAN is the usual culprit: the Portainer host needs"
   echo "a route / firewall-allow to reach it on 443 across the VLAN boundary."
 fi
 exit $rc
