@@ -19,7 +19,7 @@ async def check_vision(vision) -> CheckResult:
     try:
         ok = await vision.self_test()
     except Exception as e:
-        return CheckResult(False, f"vision endpoint unreachable: {e}")
+        return CheckResult(False, f"vision endpoint unreachable: {e} -- check VISION_URL")
     if not ok:
         return CheckResult(False, "endpoint reachable but didn't correctly describe a "
                                    "test image -- you probably forgot the mmproj (a "

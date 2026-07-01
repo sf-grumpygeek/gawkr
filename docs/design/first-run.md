@@ -50,12 +50,17 @@ Checks it runs:
   vehicle." Treating "not valid JSON" as "no image support" is a false negative
   that fires on *every* correctly-configured server (observed in phase-1
   testing). Success = a **non-empty text response that references image
-  content**, not strict JSON. The robust probe: send a small **real** photo
-  (never a 1×1 or solid color) containing something specific/unusual and check
-  the reply mentions it — a text-only model can't, so it can't fake a match, and
-  no JSON parsing is needed. Keep three distinct states: *unreachable*
-  (connection fails) vs. *reachable-but-image-blind* (real mmproj problem) vs.
-  *OK*; only show the mmproj hint for the middle one.
+  content**, not strict JSON. The robust probe: send a small **solid-color**
+  image (generated from raw pixel bytes, no image library needed — e.g. a
+  16×16 pure-red PNG) and ask which color it is; check the reply names that
+  color. A text-only model has no way to guess it, so it can't fake a match,
+  and no JSON parsing is needed. (An earlier draft of this probe rendered a
+  specific number as a seven-segment display and asked the model to read it —
+  don't do that: it's an OCR task, and a working vision model can legibly
+  misread stylized digits, reintroducing the same false-negative failure this
+  fix exists to kill. Solid-color has no legibility failure mode.) Keep three
+  distinct states: *unreachable* (connection fails) vs. *reachable-but-image-blind*
+  (real mmproj problem) vs. *OK*; only show the mmproj hint for the middle one.
 - **Whisper / Gotify**: optional — just show configured / not configured.
 
 Output is guidance, not a form. Green checks + red items with the exact env var
