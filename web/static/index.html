@@ -140,6 +140,40 @@
   .check-name{font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted)}
   .check-detail{font-size:13px;color:var(--text);margin-top:2px}
 
+  /* settings panel */
+  .settings-panel{position:fixed;top:60px;right:20px;width:420px;max-height:80vh;overflow-y:auto;
+    background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);
+    box-shadow:0 20px 50px -20px #000;z-index:50;display:none}
+  .settings-panel.show{display:block}
+  .sp-body{padding:4px 14px 14px}
+  .field{padding:12px 0;border-bottom:1px solid var(--line)}
+  .field:last-child{border-bottom:none}
+  .field-head{display:flex;justify-content:space-between;align-items:center;gap:10px}
+  .field-label{font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--text)}
+  .field-toggle{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--muted);cursor:pointer;user-select:none}
+  .field-toggle input{accent-color:var(--accent)}
+  .field-input{margin-top:8px}
+  .field-input input[type=text],.field-input input[type=number],.field-input select,.field-input textarea{
+    width:100%;padding:8px 10px;background:var(--surface-2);border:1px solid var(--line);
+    border-radius:8px;color:var(--text);font:inherit;font-size:13px;outline:none}
+  .field-input textarea{resize:vertical;min-height:72px;font-family:var(--mono)}
+  .field-input input:focus,.field-input select:focus,.field-input textarea:focus{border-color:var(--accent)}
+  .field-input input:disabled,.field-input select:disabled,.field-input textarea:disabled{opacity:.45;cursor:not-allowed}
+  .field-input label{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:13px}
+  .field-default{font-size:11px;color:var(--muted);margin-top:6px;font-style:italic}
+  .field-counter{font-size:11px;color:var(--muted);margin-top:4px;text-align:right;font-family:var(--mono)}
+  .field-counter.over{color:var(--bad)}
+  .field-err{font-size:12px;color:var(--bad);margin-top:6px}
+  .sp-foot{display:flex;align-items:center;gap:10px;padding:12px 14px;border-top:1px solid var(--line);
+    position:sticky;bottom:0;background:var(--surface)}
+  .btn{background:var(--accent);color:#fff;border:none;border-radius:8px;padding:9px 16px;
+    font:inherit;font-size:13px;cursor:pointer}
+  .btn:hover{filter:brightness(1.08)}
+  .btn:disabled{opacity:.5;cursor:not-allowed}
+  .sp-status{font-size:12px;color:var(--muted)}
+  .sp-status.ok{color:var(--ok)}
+  .sp-status.bad{color:var(--bad)}
+
   @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style>
 </head>
@@ -151,6 +185,7 @@
     <input id="q" placeholder="Find anything — “white truck at night”, “person at the back door”, a plate…" autocomplete="off" />
   </div>
   <div class="count" id="count"></div>
+  <button class="ghost" id="settingsBtn">Settings</button>
   <button class="ghost" id="doctorBtn">Setup</button>
 </header>
 
@@ -172,6 +207,15 @@
 <aside class="doctor-panel" id="doctorPanel" aria-hidden="true">
   <div class="dp-head"><b>Setup check</b><button id="doctorClose" aria-label="Close">✕</button></div>
   <div class="dp-body" id="doctorBody">Loading…</div>
+</aside>
+
+<aside class="settings-panel" id="settingsPanel" aria-hidden="true">
+  <div class="dp-head"><b>Settings</b><button id="settingsClose" aria-label="Close">✕</button></div>
+  <div class="sp-body" id="settingsBody">Loading…</div>
+  <div class="sp-foot">
+    <button class="btn" id="settingsSave">Save changes</button>
+    <span class="sp-status" id="settingsStatus"></span>
+  </div>
 </aside>
 
 <script>
@@ -372,6 +416,170 @@ function toggleDoctor(show){
 $("#doctorBtn").addEventListener("click", ()=> toggleDoctor(!$("#doctorPanel").classList.contains("show")));
 $("#doctorClose").addEventListener("click", ()=> toggleDoctor(false));
 document.addEventListener("keydown", e=>{ if(e.key==="Escape") toggleDoctor(false); });
+
+// settings panel -- editable keys and their types/constraints come entirely
+// from /api/settings/schema; nothing about which keys are overridable is
+// hardcoded here, so this can never drift from the server's OPERATIONAL_KEYS.
+const FIELD_LABELS = {
+  identify_vehicles: "Identify vehicles",
+  transcribe_cameras: "Transcribe cameras",
+  smart_types: "Smart detection types",
+  alert_on_weapon: "Alert on weapon",
+  alert_threat_level: "Alert threat level",
+  alert_keywords: "Alert keywords",
+  alert_cameras: "Alert cameras",
+  alert_cooldown: "Alert cooldown (seconds)",
+  describe_context: "Vision prompt context",
+};
+let _settingsSchema = null, _settingsOriginal = {};
+
+function fieldControl(key, meta, hasOverride, value){
+  const dis = hasOverride ? "" : "disabled";
+  if(meta.type==="bool"){
+    const v = typeof value==="boolean" ? value : true;
+    return `<select id="f_${key}" ${dis}>
+      <option value="true" ${v?"selected":""}>Enabled</option>
+      <option value="false" ${!v?"selected":""}>Disabled</option>
+    </select>`;
+  }
+  if(meta.type==="str_list"){
+    const v = Array.isArray(value) ? value.join(", ") : "";
+    return `<input type="text" id="f_${key}" ${dis} value="${esc(v)}" placeholder="comma-separated">`;
+  }
+  if(meta.type==="float"){
+    const v = typeof value==="number" ? value : "";
+    return `<input type="number" step="any" id="f_${key}" ${dis} value="${esc(String(v))}">`;
+  }
+  if(meta.type==="enum"){
+    const opts = meta.options || [];
+    const v = opts.includes(value) ? value : opts[0];
+    return `<select id="f_${key}" ${dis}>${opts.map(o=>
+      `<option value="${esc(o)}" ${o===v?"selected":""}>${esc(o)}</option>`).join("")}</select>`;
+  }
+  // text (describe_context) -- max_len comes from the schema, not a hardcoded constant
+  const v = typeof value==="string" ? value : "";
+  const max = meta.max_len;
+  return `<textarea id="f_${key}" ${dis} maxlength="${max}">${esc(v)}</textarea>
+    <div class="field-counter" id="c_${key}">${v.length}/${max}</div>`;
+}
+
+function fieldRow(key, meta, hasOverride, value){
+  const label = FIELD_LABELS[key] || key;
+  return `<div class="field" data-key="${key}">
+    <div class="field-head">
+      <span class="field-label">${esc(label)}</span>
+      <label class="field-toggle"><input type="checkbox" id="t_${key}" ${hasOverride?"checked":""}> override</label>
+    </div>
+    <div class="field-input">${fieldControl(key, meta, hasOverride, value)}</div>
+    <div class="field-default" id="d_${key}" style="${hasOverride?"display:none":""}">using default (from env)</div>
+    <div class="field-err" id="e_${key}"></div>
+  </div>`;
+}
+
+function bindField(key, meta){
+  const toggle = document.getElementById(`t_${key}`);
+  const ctrl = document.getElementById(`f_${key}`);
+  const def = document.getElementById(`d_${key}`);
+  toggle.addEventListener("change", ()=>{
+    ctrl.disabled = !toggle.checked;
+    def.style.display = toggle.checked ? "none" : "";
+  });
+  if(meta.type==="text"){
+    const counter = document.getElementById(`c_${key}`);
+    ctrl.addEventListener("input", ()=>{
+      const len = ctrl.value.length;
+      counter.textContent = `${len}/${meta.max_len}`;
+      counter.classList.toggle("over", len > meta.max_len);
+    });
+  }
+}
+
+async function loadSettings(){
+  const body = $("#settingsBody");
+  $("#settingsStatus").textContent = ""; $("#settingsStatus").className = "sp-status";
+  body.textContent = "Loading…";
+  try{
+    const [schemaRes, valuesRes] = await Promise.all(
+      [fetch("/api/settings/schema"), fetch("/api/settings")]);
+    if(!schemaRes.ok || !valuesRes.ok) throw new Error("fetch failed");
+    _settingsSchema = await schemaRes.json();
+    _settingsOriginal = await valuesRes.json();
+    const keys = Object.keys(_settingsSchema);
+    body.innerHTML = keys.map(k=>{
+      const has = Object.prototype.hasOwnProperty.call(_settingsOriginal, k);
+      return fieldRow(k, _settingsSchema[k], has, has ? _settingsOriginal[k] : undefined);
+    }).join("") || `<div class="check-detail">No operational settings defined.</div>`;
+    keys.forEach(k=> bindField(k, _settingsSchema[k]));
+  }catch(err){
+    body.innerHTML = `<div class="check-detail">Can’t reach the settings endpoint.</div>`;
+  }
+}
+
+function readFieldValue(key, meta){
+  const ctrl = document.getElementById(`f_${key}`);
+  if(meta.type==="bool") return ctrl.value==="true";
+  if(meta.type==="str_list") return ctrl.value.split(",").map(s=>s.trim()).filter(Boolean);
+  if(meta.type==="float") return parseFloat(ctrl.value);
+  return ctrl.value; // enum, text
+}
+
+function validateFieldValue(meta, value){
+  if(meta.type==="float" && !Number.isFinite(value)) return "must be a number";
+  if(meta.type==="enum" && !(meta.options||[]).includes(value)) return "invalid option";
+  if(meta.type==="text" && value.length > meta.max_len) return `exceeds ${meta.max_len} chars`;
+  return null;
+}
+
+async function saveSettings(){
+  const statusEl = $("#settingsStatus");
+  statusEl.className = "sp-status"; statusEl.textContent = "Saving…";
+  document.querySelectorAll(".field-err").forEach(e=> e.textContent="");
+  const toSet = {}, toDelete = [];
+  let hasError = false;
+  for(const key of Object.keys(_settingsSchema)){
+    const meta = _settingsSchema[key];
+    const toggle = document.getElementById(`t_${key}`);
+    const hadOverride = Object.prototype.hasOwnProperty.call(_settingsOriginal, key);
+    if(toggle.checked){
+      const value = readFieldValue(key, meta);
+      const err = validateFieldValue(meta, value);
+      if(err){ document.getElementById(`e_${key}`).textContent = err; hasError = true; continue; }
+      toSet[key] = value;
+    } else if(hadOverride){
+      toDelete.push(key);
+    }
+  }
+  if(hasError){
+    statusEl.className = "sp-status bad"; statusEl.textContent = "Fix the highlighted fields.";
+    return;
+  }
+  try{
+    if(Object.keys(toSet).length){
+      const r = await fetch("/api/settings", {method:"PUT",
+        headers:{"Content-Type":"application/json"}, body: JSON.stringify(toSet)});
+      if(!r.ok) throw new Error(await r.text());
+    }
+    for(const key of toDelete){
+      const r = await fetch(`/api/settings/${encodeURIComponent(key)}`, {method:"DELETE"});
+      if(!r.ok) throw new Error(await r.text());
+    }
+    statusEl.className = "sp-status ok"; statusEl.textContent = "Saved.";
+    await loadSettings();
+  }catch(err){
+    statusEl.className = "sp-status bad"; statusEl.textContent = "Save failed: " + err.message;
+  }
+}
+
+function toggleSettings(show){
+  const p = $("#settingsPanel");
+  p.classList.toggle("show", show);
+  p.setAttribute("aria-hidden", show ? "false" : "true");
+  if(show) loadSettings();
+}
+$("#settingsBtn").addEventListener("click", ()=> toggleSettings(!$("#settingsPanel").classList.contains("show")));
+$("#settingsClose").addEventListener("click", ()=> toggleSettings(false));
+$("#settingsSave").addEventListener("click", saveSettings);
+document.addEventListener("keydown", e=>{ if(e.key==="Escape") toggleSettings(false); });
 
 refreshCameras(); load(); startPoll();
 </script>

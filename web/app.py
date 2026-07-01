@@ -30,10 +30,16 @@ def _v_bool(v):
     return v
 
 
+_v_bool.meta = {"type": "bool"}
+
+
 def _v_str_list(v):
     if not isinstance(v, list) or not all(isinstance(x, str) for x in v):
         raise ValueError("expected list of strings")
     return v
+
+
+_v_str_list.meta = {"type": "str_list"}
 
 
 def _v_float(v):
@@ -42,11 +48,16 @@ def _v_float(v):
     return float(v)
 
 
+_v_float.meta = {"type": "float"}
+
+
 def _v_threat_level(v):
     if v not in _LEVELS:
         raise ValueError("invalid threat level")
     return v
 
+
+_v_threat_level.meta = {"type": "enum", "options": list(_LEVELS)}
 
 DESCRIBE_CONTEXT_MAX_LEN = 500
 
@@ -57,6 +68,9 @@ def _v_describe_context(v):
     if len(v) > DESCRIBE_CONTEXT_MAX_LEN:
         raise ValueError(f"describe_context exceeds {DESCRIBE_CONTEXT_MAX_LEN} chars")
     return v
+
+
+_v_describe_context.meta = {"type": "text", "max_len": DESCRIBE_CONTEXT_MAX_LEN}
 
 
 OPERATIONAL_KEYS = {
@@ -206,12 +220,32 @@ async def event(eid: str) -> dict:
     return out
 
 
+@app.get("/api/settings/schema")
+async def settings_schema() -> dict:
+    """Metadata (type + constraints) for every operational key, so the UI can
+    render the full editable set -- including keys with no override row yet --
+    without keeping its own copy of OPERATIONAL_KEYS or its constraints."""
+    return {key: fn.meta for key, fn in OPERATIONAL_KEYS.items()}
+
+
 @app.get("/api/settings")
 async def get_settings() -> dict:
     """Sparse DB overrides only -- keys not set here still fall back to the
     bridge's env-configured default, which this service cannot see."""
     rows = await _pool.fetch("SELECT key, value FROM settings")
     return {r["key"]: r["value"] for r in rows if r["key"] in OPERATIONAL_KEYS}
+
+
+@app.delete("/api/settings/{key}")
+async def delete_setting(key: str) -> dict:
+    """Clear an override so the key falls back to its env/default value."""
+    if key not in OPERATIONAL_KEYS:
+        raise HTTPException(400, f"not overridable: {key}")
+    async with _pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute("DELETE FROM settings WHERE key = $1", key)
+            await conn.execute("NOTIFY gawkr_settings")
+    return {"deleted": key}
 
 
 @app.put("/api/settings")
