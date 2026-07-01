@@ -43,8 +43,19 @@ Checks it runs:
   route to the Protect subnet."
 - **Vision endpoint** reachable + actually image-capable? On failure →
   "a text-only model can't see images — you probably forgot the **mmproj**."
-  (A cheap way to test: send a tiny image and confirm a non-empty, parseable
-  response.)
+
+  **The vision check must NOT require JSON output.** A correctly configured
+  vision model (Qwen2.5-VL with mmproj loaded) returns plain prose to a generic
+  prompt — e.g. "A person with long hair and a beige hat is seated inside a
+  vehicle." Treating "not valid JSON" as "no image support" is a false negative
+  that fires on *every* correctly-configured server (observed in phase-1
+  testing). Success = a **non-empty text response that references image
+  content**, not strict JSON. The robust probe: send a small **real** photo
+  (never a 1×1 or solid color) containing something specific/unusual and check
+  the reply mentions it — a text-only model can't, so it can't fake a match, and
+  no JSON parsing is needed. Keep three distinct states: *unreachable*
+  (connection fails) vs. *reachable-but-image-blind* (real mmproj problem) vs.
+  *OK*; only show the mmproj hint for the middle one.
 - **Whisper / Gotify**: optional — just show configured / not configured.
 
 Output is guidance, not a form. Green checks + red items with the exact env var
