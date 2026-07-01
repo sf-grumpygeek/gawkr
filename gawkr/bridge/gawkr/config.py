@@ -32,6 +32,10 @@ class Config:
     vision_api_key: str = field(default_factory=lambda: os.environ.get("VISION_API_KEY", ""))
     vision_model: str = field(default_factory=lambda: os.environ.get("VISION_MODEL", "qwen2.5-vl"))
     vision_timeout: float = field(default_factory=lambda: float(os.environ.get("VISION_TIMEOUT", "60")))
+    # Additive, operator-supplied context injected into the describe prompt
+    # (site-specific background, e.g. "rural property; farm trucks are normal").
+    # Never a replacement for the JSON-schema instructions -- see vision.py.
+    describe_context: str = field(default_factory=lambda: os.environ.get("DESCRIBE_CONTEXT", ""))
 
     # --- Whisper transcription (optional; blank = off) ---
     whisper_url: str = field(default_factory=lambda: os.environ.get("WHISPER_URL", ""))

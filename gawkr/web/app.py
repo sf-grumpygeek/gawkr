@@ -48,6 +48,17 @@ def _v_threat_level(v):
     return v
 
 
+DESCRIBE_CONTEXT_MAX_LEN = 500
+
+
+def _v_describe_context(v):
+    if not isinstance(v, str):
+        raise ValueError("expected string")
+    if len(v) > DESCRIBE_CONTEXT_MAX_LEN:
+        raise ValueError(f"describe_context exceeds {DESCRIBE_CONTEXT_MAX_LEN} chars")
+    return v
+
+
 OPERATIONAL_KEYS = {
     "identify_vehicles": _v_bool,
     "transcribe_cameras": _v_str_list,
@@ -57,6 +68,7 @@ OPERATIONAL_KEYS = {
     "alert_keywords": _v_str_list,
     "alert_cameras": _v_str_list,
     "alert_cooldown": _v_float,
+    "describe_context": _v_describe_context,
 }
 
 app = FastAPI(title="gawkr")

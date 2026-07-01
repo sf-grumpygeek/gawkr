@@ -36,6 +36,7 @@ services:
       VISION_MODEL: ${VISION_MODEL:-qwen2.5-vl}
       VISION_API_KEY: ${VISION_API_KEY:-}
       VISION_TIMEOUT: ${VISION_TIMEOUT:-60}
+      DESCRIBE_CONTEXT: ${DESCRIBE_CONTEXT:-}
       # --- Whisper transcription (optional; blank = off) ---
       WHISPER_URL: ${WHISPER_URL:-}
       WHISPER_TIMEOUT: ${WHISPER_TIMEOUT:-120}

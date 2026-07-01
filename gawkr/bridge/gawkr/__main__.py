@@ -30,7 +30,7 @@ async def main() -> None:
     await settings.start()
 
     vision = VisionClient(cfg)
-    processors = [DescriptionProcessor(vision), PlateProcessor(vision),
+    processors = [DescriptionProcessor(vision, settings), PlateProcessor(vision),
                   VehicleProcessor(vision, settings)]
     closers = [vision.close]
 

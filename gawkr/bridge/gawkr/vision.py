@@ -90,8 +90,15 @@ class VisionClient:
         r.raise_for_status()
         return r.json()["choices"][0]["message"]["content"]
 
-    async def describe(self, jpeg: bytes, types: list[str], camera: str = "") -> dict:
-        prompt = DESCRIBE_SYSTEM + "\n\n" + DESCRIBE_USER.format(
+    async def describe(self, jpeg: bytes, types: list[str], camera: str = "",
+                       context: str = "") -> dict:
+        prompt = DESCRIBE_SYSTEM
+        if context:
+            # Additive background only -- never replaces the JSON-schema
+            # instructions below, which must stay the last thing the model reads.
+            prompt += ("\n\nSite-specific context from the operator (background only; "
+                      "still report only what you observe in this image): " + context)
+        prompt += "\n\n" + DESCRIBE_USER.format(
             camera=camera or "unknown", types=", ".join(types) or "motion")
         data = _parse(await self._chat(jpeg, prompt, 450))
         data.setdefault("summary", "")

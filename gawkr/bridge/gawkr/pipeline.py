@@ -29,14 +29,16 @@ class DescriptionProcessor:
     """Description + single-frame safety assessment (one vision call)."""
     name = "description"
 
-    def __init__(self, vision):
+    def __init__(self, vision, settings):
         self.vision = vision
+        self.settings = settings
 
     def handles(self, det: Detection) -> bool:
         return det.snapshot is not None
 
     async def process(self, det: Detection) -> dict:
-        return await self.vision.describe(det.snapshot, det.smart_types, det.camera_name)
+        return await self.vision.describe(det.snapshot, det.smart_types, det.camera_name,
+                                          self.settings.describe_context)
 
 
 class PlateProcessor:
