@@ -51,6 +51,12 @@ def _v_describe_context(v):
 
 # The only keys the DB may override. Enforced on write (web PUT) and on
 # reload (here) -- secrets and infra endpoints must never appear in this dict.
+#
+# NOTE: web/app.py's OPERATIONAL_KEYS has one extra entry, feed_default_window,
+# that is deliberately absent here -- it controls the events feed's initial
+# time window, a web-only concern with no Config field for the bridge to read.
+# reload() below skips any settings-table key with no validator here, so its
+# presence in the table is harmless to the bridge.
 OPERATIONAL_KEYS = {
     "identify_vehicles": _v_bool,
     "transcribe_cameras": _v_str_list,

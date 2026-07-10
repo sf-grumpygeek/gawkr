@@ -192,6 +192,12 @@
 
 <div class="toolbar">
   <select id="camera"><option value="">All cameras</option></select>
+  <select id="timerange">
+    <option value="24h">Last 24h</option>
+    <option value="7d">Last 7 days</option>
+    <option value="30d">Last 30 days</option>
+    <option value="all">All time</option>
+  </select>
   <div class="chips" id="types"></div>
   <div class="spacer"></div>
   <button class="ghost" id="clear">Clear</button>
@@ -200,6 +206,9 @@
 <main>
   <div id="view" class="grid"></div>
   <div id="status" class="loading">Connecting…</div>
+  <div id="loadMoreWrap" style="text-align:center;margin-top:18px;display:none">
+    <button class="ghost" id="loadMore">Load more</button>
+  </div>
 </main>
 
 <div class="scrim" id="scrim"></div>
@@ -221,9 +230,24 @@
 
 <script>
 const TYPES = ["person","vehicle","animal","licensePlate","package","face"];
-const state = { mode:"feed", q:"", camera:"", type:"", poll:null };
+const PAGE_LIMIT = 60; // must match /api/events' default `limit`
+const FEED_DEFAULT_WINDOW_FALLBACK = "7d"; // used only if /api/settings is unreachable
+const state = { mode:"feed", q:"", camera:"", type:"", window:FEED_DEFAULT_WINDOW_FALLBACK,
+  items:[], hasMore:false, poll:null };
 const $ = s => document.querySelector(s);
 const view = $("#view"), status = $("#status");
+
+// Dedup a list of events by event_id, keeping the first occurrence -- shared
+// by loadMore (re-fetched boundary row from the ts<=before cursor) and
+// pollFeed (re-fetched first page overlapping already-loaded items).
+function dedupEvents(...lists){
+  const seen = new Set(), out = [];
+  for(const list of lists) for(const e of list){
+    if(seen.has(e.event_id)) continue;
+    seen.add(e.event_id); out.push(e);
+  }
+  return out;
+}
 
 function fmtTime(ts){ const d=new Date(ts*1000);
   return d.toLocaleTimeString([], {hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false}); }
@@ -252,38 +276,80 @@ function card(e){
   </article>`;
 }
 
-function render(list){
+function render(){
+  const list = state.items;
   if(!list.length){
     view.innerHTML=""; status.style.display="";
     status.className="empty";
     status.innerHTML = state.mode==="search"
       ? `<b>Nothing matches “${esc(state.q)}”.</b>Try fewer words, or a color, vehicle, or action.`
       : `<b>No events yet.</b>When a camera detects something, it shows up here.`;
-    return;
+  } else {
+    status.style.display="none";
+    view.innerHTML = list.map(card).join("");
   }
-  status.style.display="none";
-  view.innerHTML = list.map(card).join("");
   $("#count").textContent = list.length + (state.mode==="search"?" matches":" events");
+  $("#loadMoreWrap").style.display = (state.mode==="feed" && state.hasMore) ? "" : "none";
+}
+
+function showLoadError(){
+  status.style.display=""; status.className="empty";
+  status.innerHTML=`<b>Can’t reach the bridge.</b>Check that the stack is up: <code>docker compose ps</code>.`;
+  setLive(false);
+}
+
+function feedUrl(before){
+  const p = new URLSearchParams();
+  if(state.camera) p.set("camera", state.camera);
+  if(state.type) p.set("type", state.type);
+  p.set("since", state.window);
+  if(before != null) p.set("before", before);
+  return `/api/events?${p.toString()}`;
+}
+
+async function fetchFeedPage(before){
+  const r = await fetch(feedUrl(before)); if(!r.ok) throw new Error(r.status);
+  return r.json();
 }
 
 async function load(){
-  let url;
-  if(state.mode==="search"){ url = `/api/search?q=${encodeURIComponent(state.q)}`; }
-  else {
-    const p = new URLSearchParams();
-    if(state.camera) p.set("camera", state.camera);
-    if(state.type) p.set("type", state.type);
-    url = `/api/events?${p.toString()}`;
+  if(state.mode==="search"){
+    try{
+      const r = await fetch(`/api/search?q=${encodeURIComponent(state.q)}`);
+      if(!r.ok) throw new Error(r.status);
+      state.items = await r.json(); state.hasMore = false;
+      render(); setLive(false);
+    }catch(err){ showLoadError(); }
+    return;
   }
   try{
-    const r = await fetch(url); if(!r.ok) throw new Error(r.status);
-    render(await r.json());
-    setLive(state.mode==="feed");
-  }catch(err){
-    status.style.display=""; status.className="empty";
-    status.innerHTML=`<b>Can’t reach the bridge.</b>Check that the stack is up: <code>docker compose ps</code>.`;
-    setLive(false);
-  }
+    const page = await fetchFeedPage(null);
+    state.items = page; state.hasMore = page.length === PAGE_LIMIT;
+    render(); setLive(true);
+  }catch(err){ showLoadError(); }
+}
+
+async function loadMore(){
+  if(state.mode!=="feed" || !state.hasMore || !state.items.length) return;
+  const before = state.items[state.items.length - 1].ts;
+  try{
+    const page = await fetchFeedPage(before);
+    state.items = dedupEvents(state.items, page);
+    state.hasMore = page.length === PAGE_LIMIT;
+    render();
+  }catch(err){ /* leave existing items in place; user can retry */ }
+}
+
+// The 6s live poll only ever re-fetches page 1. Without merging, it would
+// silently wipe out anything paged in via loadMore(). Prepend genuinely new
+// events, dedup the overlap, and keep already-loaded older items in place.
+async function pollFeed(){
+  if(state.mode!=="feed") return;
+  try{
+    const page = await fetchFeedPage(null);
+    state.items = dedupEvents(page, state.items);
+    render(); setLive(true);
+  }catch(err){ setLive(false); }
 }
 
 function setLive(on){
@@ -291,8 +357,11 @@ function setLive(on){
   $("#livelbl").textContent = on ? "live" : "paused";
 }
 
-function startPoll(){ stopPoll(); state.poll=setInterval(()=>{ refreshCameras(); if(state.mode==="feed") load(); }, 6000); }
+function startPoll(){ stopPoll(); state.poll=setInterval(()=>{ refreshCameras(); if(state.mode==="feed") pollFeed(); }, 6000); }
 function stopPoll(){ if(state.poll) clearInterval(state.poll); }
+
+$("#loadMore").addEventListener("click", loadMore);
+$("#timerange").addEventListener("change", e=>{ state.window=e.target.value; if(state.mode==="feed") load(); });
 
 // search input (debounced)
 let t; $("#q").addEventListener("input", e=>{
@@ -431,6 +500,7 @@ const FIELD_LABELS = {
   alert_cameras: "Alert cameras",
   alert_cooldown: "Alert cooldown (seconds)",
   describe_context: "Vision prompt context",
+  feed_default_window: "Default feed window",
 };
 let _settingsSchema = null, _settingsOriginal = {};
 
@@ -453,7 +523,10 @@ function fieldControl(key, meta, hasOverride, value){
   }
   if(meta.type==="enum"){
     const opts = meta.options || [];
-    const v = opts.includes(value) ? value : opts[0];
+    // Prefer the schema's declared default (only feed_default_window has one)
+    // over opts[0] -- otherwise the disabled placeholder shows the wrong value.
+    const fallback = opts.includes(meta.default) ? meta.default : opts[0];
+    const v = opts.includes(value) ? value : fallback;
     return `<select id="f_${key}" ${dis}>${opts.map(o=>
       `<option value="${esc(o)}" ${o===v?"selected":""}>${esc(o)}</option>`).join("")}</select>`;
   }
@@ -586,7 +659,27 @@ $("#settingsClose").addEventListener("click", ()=> toggleSettings(false));
 $("#settingsSave").addEventListener("click", saveSettings);
 document.addEventListener("keydown", e=>{ if(e.key==="Escape") toggleSettings(false); });
 
-refreshCameras(); load(); startPoll();
+// Resolve the initial feed window from the settings-backed default (DB
+// override, else the schema's declared default) before the first load, so
+// the feed opens on whatever the operator configured rather than a hardcoded
+// window. Falls back to FEED_DEFAULT_WINDOW_FALLBACK if settings can't be reached.
+async function initFeedWindow(){
+  try{
+    const [schemaRes, valuesRes] = await Promise.all(
+      [fetch("/api/settings/schema"), fetch("/api/settings")]);
+    if(schemaRes.ok && valuesRes.ok){
+      const schema = await schemaRes.json();
+      const values = await valuesRes.json();
+      const def = values.feed_default_window
+        ?? schema.feed_default_window?.default
+        ?? FEED_DEFAULT_WINDOW_FALLBACK;
+      state.window = def;
+    }
+  }catch{}
+  $("#timerange").value = state.window;
+}
+
+initFeedWindow().then(()=>{ refreshCameras(); load(); startPoll(); });
 </script>
 </body>
 </html>

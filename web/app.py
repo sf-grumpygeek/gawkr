@@ -117,6 +117,22 @@ def _v_describe_context(v):
 
 _v_describe_context.meta = {"type": "text", "max_len": DESCRIBE_CONTEXT_MAX_LEN}
 
+# Duration keywords for the events feed's time-range filter. "all" = no
+# WHERE ts >= ... clause at all, not a very-large window.
+SINCE_WINDOWS = {"24h": 86400, "7d": 7 * 86400, "30d": 30 * 86400, "all": None}
+FEED_DEFAULT_WINDOW = "7d"
+
+
+def _v_feed_window(v):
+    if v not in SINCE_WINDOWS:
+        raise ValueError("invalid window")
+    return v
+
+
+_v_feed_window.meta = {
+    "type": "enum", "options": list(SINCE_WINDOWS), "default": FEED_DEFAULT_WINDOW,
+}
+
 
 OPERATIONAL_KEYS = {
     "identify_vehicles": _v_bool,
@@ -128,6 +144,10 @@ OPERATIONAL_KEYS = {
     "alert_cameras": _v_str_list,
     "alert_cooldown": _v_float,
     "describe_context": _v_describe_context,
+    # feed_default_window is web-only -- it controls the events feed's initial
+    # time window and bridge never reads it, so it's deliberately absent from
+    # bridge/gawkr/settings.py's OPERATIONAL_KEYS (no Config field backs it there).
+    "feed_default_window": _v_feed_window,
 }
 
 app = FastAPI(title="gawkr")
@@ -370,7 +390,11 @@ async def cameras() -> list[str]:
 @app.get("/api/events")
 async def events(camera: str | None = None,
                  type: str | None = Query(None),
+                 since: str = FEED_DEFAULT_WINDOW,
+                 before: int | None = None,
                  limit: int = 60) -> list[dict]:
+    if since not in SINCE_WINDOWS:
+        raise HTTPException(400, f"invalid since: {since}")
     limit = max(1, min(limit, 200))
     where, args = [], []
     if camera:
@@ -379,11 +403,21 @@ async def events(camera: str | None = None,
     if type:
         args.append(type)
         where.append(f"${len(args)} = ANY(smart_types)")
+    window = SINCE_WINDOWS[since]
+    if window is not None:
+        args.append(int(time.time()) - window)
+        where.append(f"ts >= ${len(args)}")
+    if before is not None:
+        # <=, not <: a strict "<" cursor can silently skip events that share
+        # the boundary second with the last-loaded row when a page cuts off
+        # mid-tie. Callers dedup the re-fetched boundary row by event_id.
+        args.append(before)
+        where.append(f"ts <= ${len(args)}")
     clause = ("WHERE " + " AND ".join(where)) if where else ""
     args.append(limit)
     rows = await _pool.fetch(
         f"SELECT event_id, ts, camera, smart_types, summary, notable, snapshot, record "
-        f"FROM events {clause} ORDER BY ts DESC LIMIT ${len(args)}", *args)
+        f"FROM events {clause} ORDER BY ts DESC, event_id DESC LIMIT ${len(args)}", *args)
     return [_row(r) for r in rows]
 
 
